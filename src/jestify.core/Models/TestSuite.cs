@@ -1,4 +1,4 @@
-﻿namespace jestify.core;
+﻿namespace jestify;
 
 public class TestSuite(string title)
 {

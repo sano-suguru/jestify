@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 
-namespace jestify.core;
+namespace jestify;
 
 /// <summary>
 /// テストフレームワークの設定を定義します。
@@ -10,7 +10,7 @@ public class TestConfiguration
     /// <summary>
     /// カスタムロガーを設定します。
     /// </summary>
-    public ILogger? Logger { get; set; }  // TestLogger? から ILogger? に変更
+    public ILogger? Logger { get; set; } 
 
     /// <summary>
     /// ロギングの設定を行います。
@@ -20,7 +20,7 @@ public class TestConfiguration
     /// <summary>
     /// カスタムライフサイクルマネージャーを設定します。
     /// </summary>
-    public TestLifecycleManager? LifecycleManager { get; set; }
+    public ITestLifecycleManager? LifecycleManager { get; set; }
 
     /// <summary>
     /// デフォルトのタイムアウト時間（ミリ秒）を設定します。

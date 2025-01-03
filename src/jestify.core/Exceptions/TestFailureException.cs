@@ -1,4 +1,4 @@
-﻿namespace jestify.core;
+﻿namespace jestify;
 
 public class TestFailureException(
     string title, TimeSpan duration, Exception inner)

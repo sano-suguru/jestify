@@ -1,96 +1,93 @@
 ﻿using Microsoft.Extensions.Logging;
 
-namespace jestify.core;
+namespace jestify;
 
-public class TestLogger
+public class TestLogger : ITestLogger
 {
     private readonly AsyncLocal<ILogger> _logger = new();
 
-    /// <summary>
-    /// ロガーを設定します。
-    /// </summary>
-    public void SetLogger(ILogger logger) => _logger.Value = logger;
+    /// <inheritdoc />
+    public void SetLogger(ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        _logger.Value = logger;
+    }
 
-    /// <summary>
-    /// テストスイートの開始をログに記録します。
-    /// </summary>
-    public void LogSuiteStart(string title) 
-        => _logger.Value?.LogInformation("[Describe] {Title}", title);
+    /// <inheritdoc />
+    public void LogSuiteStart(string title)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(title);
+        _logger.Value?.LogInformation("[Describe] {Title}", title);
+    }
 
-    /// <summary>
-    /// テストの成功をログに記録します。
-    /// </summary>
+    /// <inheritdoc />
     public void LogTestSuccess(string title, long elapsedMs)
     {
+        ArgumentException.ThrowIfNullOrEmpty(title);
         _logger.Value?.LogInformation("✔ {Title} (Completed in {Elapsed} ms)",
             title, elapsedMs);
     }
 
-    /// <summary>
-    /// テストのタイムアウトをログに記録します。
-    /// </summary>
+    /// <inheritdoc />
     public void LogTestTimeout(string title, int timeoutMs)
     {
+        ArgumentException.ThrowIfNullOrEmpty(title);
         _logger.Value?.LogWarning("⚠ {Title} (Timed out after {Timeout} ms)",
             title, timeoutMs);
     }
 
-    /// <summary>
-    /// テストのキャンセルをログに記録します。
-    /// </summary>
+    /// <inheritdoc />
     public void LogTestCancelled(string title, long elapsedMs)
     {
+        ArgumentException.ThrowIfNullOrEmpty(title);
         _logger.Value?.LogWarning("⚠ {Title} (Cancelled after {Elapsed} ms)",
             title, elapsedMs);
     }
 
-    /// <summary>
-    /// テストの失敗をログに記録します。
-    /// </summary>
+    /// <inheritdoc />
     public void LogTestFailure(string title, long elapsedMs, Exception exception)
     {
+        ArgumentException.ThrowIfNullOrEmpty(title);
+        ArgumentNullException.ThrowIfNull(exception);
         _logger.Value?.LogError(exception, "✘ {Title} (Failed after {Elapsed} ms)",
             title, elapsedMs);
     }
 
-    /// <summary>
-    /// テストのスキップをログに記録します。
-    /// </summary>
+    /// <inheritdoc />
     public void LogTestSkipped(string title, string? reason = null)
     {
+        ArgumentException.ThrowIfNullOrEmpty(title);
         _logger.Value?.LogInformation("⏭ {Title} {Reason}",
             title, reason != null ? $"(Skipped: {reason})" : "(Skipped)");
     }
 
-    /// <summary>
-    /// BeforeAll/AfterAllフックのエラーをログに記録します。
-    /// </summary>
+    /// <inheritdoc />
     public void LogHookError(string hookType, string suiteTitle, Exception exception)
     {
+        ArgumentException.ThrowIfNullOrEmpty(hookType);
+        ArgumentException.ThrowIfNullOrEmpty(suiteTitle);
+        ArgumentNullException.ThrowIfNull(exception);
         _logger.Value?.LogError(exception, "Error in {HookType} hook for suite: {SuiteTitle}",
             hookType, suiteTitle);
     }
 
-    /// <summary>
-    /// BeforeEach/AfterEachフックのエラーをログに記録します。
-    /// </summary>
+    /// <inheritdoc />
     public void LogEachHookError(string hookType, Exception exception)
     {
+        ArgumentException.ThrowIfNullOrEmpty(hookType);
+        ArgumentNullException.ThrowIfNull(exception);
         _logger.Value?.LogError(exception, "Error in {HookType} hook",
             hookType);
     }
 
-    /// <summary>
-    /// デバッグ情報をログに記録します。
-    /// </summary>
+    /// <inheritdoc />
     public void LogDebug(string message, params object[] args)
     {
+        ArgumentException.ThrowIfNullOrEmpty(message);
         _logger.Value?.LogDebug(message, args);
     }
 
-    /// <summary>
-    /// ロガーが設定されていない場合にデフォルトのコンソールロガーを設定します。
-    /// </summary>
+    /// <inheritdoc />
     public void EnsureLogger()
     {
         _logger.Value ??= LoggerFactory.Create(builder => builder.AddConsole())

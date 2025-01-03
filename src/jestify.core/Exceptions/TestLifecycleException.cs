@@ -1,4 +1,4 @@
-﻿namespace jestify.core;
+﻿namespace jestify;
 
 /// <summary>
 /// テストライフサイクル管理中に発生した例外を表します。

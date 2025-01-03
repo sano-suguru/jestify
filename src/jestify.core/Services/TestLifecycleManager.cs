@@ -1,67 +1,62 @@
-﻿namespace jestify.core;
+﻿namespace jestify;
 
-public class TestLifecycleManager
+public class TestLifecycleManager : ITestLifecycleManager
 {
     private readonly AsyncLocal<Stack<TestSuite>> _suiteStack = new();
-    private readonly TestLogger _logger;
+    private readonly ITestLogger _logger;
 
-    public TestLifecycleManager(TestLogger logger)
+    public TestLifecycleManager(ITestLogger logger)
     {
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
     }
 
-    /// <summary>
-    /// 現在のテストスイートを取得します。
-    /// </summary>
+    /// <inheritdoc />
     public TestSuite GetCurrentSuite()
     {
         _suiteStack.Value ??= new Stack<TestSuite>();
         if (_suiteStack.Value.Count == 0)
         {
-            throw new InvalidOperationException("Test hooks must be called within a describe block");
+            throw new TestLifecycleException("Test hooks must be called within a describe block");
         }
         return _suiteStack.Value.Peek();
     }
 
-    /// <summary>
-    /// 新しいテストスイートをスタックにプッシュします。
-    /// </summary>
+    /// <inheritdoc />
     public void PushSuite(TestSuite suite)
     {
+        ArgumentNullException.ThrowIfNull(suite);
         _suiteStack.Value ??= new Stack<TestSuite>();
         _suiteStack.Value.Push(suite);
     }
 
-    /// <summary>
-    /// 現在のテストスイートをスタックからポップします。
-    /// </summary>
+    /// <inheritdoc />
     public TestSuite PopSuite()
     {
         var stack = _suiteStack.Value;
         if (stack == null || stack.Count == 0)
         {
-            throw new InvalidOperationException("No test suite to pop");
+            throw new TestLifecycleException("No test suite to pop");
         }
         return stack.Pop();
     }
 
-    /// <summary>
-    /// BeforeAllフックを実行します。
-    /// </summary>
+    /// <inheritdoc />
     public async Task ExecuteBeforeAllHooks(TestSuite suite, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(suite);
+
         foreach (var hook in suite.BeforeAll)
         {
             await hook(cancellationToken);
         }
     }
 
-    /// <summary>
-    /// AfterAllフックを実行します。
-    /// </summary>
+    /// <inheritdoc />
     public async Task ExecuteAfterAllHooks(TestSuite suite, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(suite);
+
         foreach (var hook in suite.AfterAll)
         {
             try
@@ -75,9 +70,7 @@ public class TestLifecycleManager
         }
     }
 
-    /// <summary>
-    /// BeforeEachフックを実行します。
-    /// </summary>
+    /// <inheritdoc />
     public async Task ExecuteBeforeEachHooks(CancellationToken cancellationToken)
     {
         _suiteStack.Value ??= new Stack<TestSuite>();
@@ -93,9 +86,7 @@ public class TestLifecycleManager
         }
     }
 
-    /// <summary>
-    /// AfterEachフックを実行します。
-    /// </summary>
+    /// <inheritdoc />
     public async Task ExecuteAfterEachHooks(CancellationToken cancellationToken)
     {
         _suiteStack.Value ??= new Stack<TestSuite>();
@@ -117,38 +108,34 @@ public class TestLifecycleManager
         }
     }
 
-    /// <summary>
-    /// スイートにBeforeAllフックを追加します。
-    /// </summary>
+    /// <inheritdoc />
     public void AddBeforeAllHook(Func<CancellationToken, Task> action)
     {
+        ArgumentNullException.ThrowIfNull(action);
         var suite = this.GetCurrentSuite();
         suite.BeforeAll.Add(action);
     }
 
-    /// <summary>
-    /// スイートにAfterAllフックを追加します。
-    /// </summary>
+    /// <inheritdoc />
     public void AddAfterAllHook(Func<CancellationToken, Task> action)
     {
+        ArgumentNullException.ThrowIfNull(action);
         var suite = this.GetCurrentSuite();
         suite.AfterAll.Add(action);
     }
 
-    /// <summary>
-    /// スイートにBeforeEachフックを追加します。
-    /// </summary>
+    /// <inheritdoc />
     public void AddBeforeEachHook(Func<CancellationToken, Task> action)
     {
+        ArgumentNullException.ThrowIfNull(action);
         var suite = this.GetCurrentSuite();
         suite.BeforeEach.Add(action);
     }
 
-    /// <summary>
-    /// スイートにAfterEachフックを追加します。
-    /// </summary>
+    /// <inheritdoc />
     public void AddAfterEachHook(Func<CancellationToken, Task> action)
     {
+        ArgumentNullException.ThrowIfNull(action);
         var suite = this.GetCurrentSuite();
         suite.AfterEach.Add(action);
     }

@@ -1,4 +1,4 @@
-﻿namespace jestify.core;
+﻿namespace jestify;
 
 /// <summary>
 /// テストがタイムアウトした場合にスローされる例外

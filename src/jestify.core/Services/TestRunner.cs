@@ -1,20 +1,20 @@
 ﻿using System.Diagnostics;
 
-namespace jestify.core;
+namespace jestify;
 
 /// <summary>
 /// テストの実行を制御するランナークラス
 /// </summary>
 public class TestRunner
 {
-    private readonly TestLogger _logger;
-    private readonly TestLifecycleManager _lifecycleManager;
+    private readonly ITestLogger _logger;
+    private readonly ITestLifecycleManager _lifecycleManager;
     private readonly ParallelOptions _defaultParallelOptions;
     private int _defaultTimeout;
 
     public TestRunner(
-        TestLogger logger,
-        TestLifecycleManager lifecycleManager,
+        ITestLogger logger,
+        ITestLifecycleManager lifecycleManager,
         int defaultTimeout = 5000)
     {
         ArgumentNullException.ThrowIfNull(logger);
