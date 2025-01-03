@@ -10,15 +10,20 @@ public class TestRunner
     private readonly TestLogger _logger;
     private readonly TestLifecycleManager _lifecycleManager;
     private readonly ParallelOptions _defaultParallelOptions;
-    private int _defaultTimeout = 5000;
+    private int _defaultTimeout;
 
-    public TestRunner(TestLogger logger, TestLifecycleManager lifecycleManager)
+    public TestRunner(
+        TestLogger logger,
+        TestLifecycleManager lifecycleManager,
+        int defaultTimeout = 5000)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(lifecycleManager);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(defaultTimeout, 0);
 
         _logger = logger;
         _lifecycleManager = lifecycleManager;
+        _defaultTimeout = defaultTimeout;
         _defaultParallelOptions = new ParallelOptions
         {
             MaxDegreeOfParallelism = Environment.ProcessorCount

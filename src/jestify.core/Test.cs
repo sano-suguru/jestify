@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
 using Moq;
-using System.Diagnostics;
 
 namespace jestify.core;
 
@@ -8,13 +7,14 @@ public static class Test
 {
     private static readonly TestLogger _testLogger;
     private static readonly TestLifecycleManager _lifecycleManager;
-    private static int _defaultTimeout = 5000;
+    private static readonly TestRunner _testRunner;
     private static bool _isInitialized;
 
     static Test()
     {
         _testLogger = new TestLogger();
         _lifecycleManager = new TestLifecycleManager(_testLogger);
+        _testRunner = new TestRunner(_testLogger, _lifecycleManager);
     }
 
     /// <summary>
@@ -37,7 +37,11 @@ public static class Test
                 .CreateLogger(nameof(Test)));
         }
 
-        _defaultTimeout = config.DefaultTimeout;
+        if (config.DefaultTimeout > 0)
+        {
+            _testRunner.SetTimeout(config.DefaultTimeout);
+        }
+
         _isInitialized = true;
     }
 
@@ -54,6 +58,7 @@ public static class Test
     /// </summary>
     public static void SetLogger(ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(logger);
         Initialize();
         _testLogger.SetLogger(logger);
     }
@@ -63,43 +68,20 @@ public static class Test
     /// </summary>
     public static void SetTimeout(int timeoutMs)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeoutMs, 0);
-        _defaultTimeout = timeoutMs;
+        Initialize();
+        _testRunner.SetTimeout(timeoutMs);
     }
 
     /// <summary>
     /// テストスイートを定義します。
     /// </summary>
-    public static async Task Describe(string title, Func<Task> suite, CancellationToken cancellationToken = default)
+    public static Task Describe(string title, Func<Task> suite, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(title);
         ArgumentNullException.ThrowIfNull(suite);
         Initialize();
 
-        _testLogger.LogSuiteStart(title);
-        var currentSuite = new TestSuite(title);
-        _lifecycleManager.PushSuite(currentSuite);
-
-        try
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(_defaultTimeout);
-
-            await _lifecycleManager.ExecuteBeforeAllHooks(currentSuite, timeoutCts.Token);
-            await suite().WaitAsync(timeoutCts.Token);
-        }
-        finally
-        {
-            try
-            {
-                await _lifecycleManager.ExecuteAfterAllHooks(currentSuite, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _testLogger.LogHookError("AfterAll", currentSuite.Title, ex);
-            }
-            _lifecycleManager.PopSuite();
-        }
+        return _testRunner.RunSuite(title, ct => suite(), cancellationToken);
     }
 
     /// <summary>
@@ -114,50 +96,13 @@ public static class Test
     /// <summary>
     /// 非同期メソッドのテストを定義します。
     /// </summary>
-    public static async Task It(string title, Func<Task> test, CancellationToken cancellationToken = default)
+    public static Task It(string title, Func<Task> test, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(title);
         ArgumentNullException.ThrowIfNull(test);
         Initialize();
 
-        var stopwatch = Stopwatch.StartNew();
-
-        try
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(_defaultTimeout);
-
-            await _lifecycleManager.ExecuteBeforeEachHooks(timeoutCts.Token);
-
-            try
-            {
-                await test().WaitAsync(timeoutCts.Token);
-                stopwatch.Stop();
-                _testLogger.LogTestSuccess(title, stopwatch.ElapsedMilliseconds);
-            }
-            finally
-            {
-                await _lifecycleManager.ExecuteAfterEachHooks(cancellationToken);
-            }
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            stopwatch.Stop();
-            _testLogger.LogTestTimeout(title, _defaultTimeout);
-            throw new TestTimeoutException(title, TimeSpan.FromMilliseconds(_defaultTimeout));
-        }
-        catch (OperationCanceledException)
-        {
-            stopwatch.Stop();
-            _testLogger.LogTestCancelled(title, stopwatch.ElapsedMilliseconds);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            stopwatch.Stop();
-            _testLogger.LogTestFailure(title, stopwatch.ElapsedMilliseconds, ex);
-            throw new TestFailureException(title, TimeSpan.FromMilliseconds(stopwatch.ElapsedMilliseconds), ex);
-        }
+        return _testRunner.RunTest(title, ct => test(), cancellationToken);
     }
 
     /// <summary>
@@ -172,7 +117,7 @@ public static class Test
     /// <summary>
     /// データ駆動テストを実行します。
     /// </summary>
-    public static async Task Each<T>(
+    public static Task Each<T>(
         string title,
         IEnumerable<T> cases,
         Func<T, Task> test,
@@ -184,24 +129,12 @@ public static class Test
         ArgumentNullException.ThrowIfNull(test);
         Initialize();
 
-        if (parallel)
-        {
-            var options = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = Environment.ProcessorCount,
-                CancellationToken = cancellationToken
-            };
-
-            await Parallel.ForEachAsync(cases, options, async (item, ct) =>
-                await It($"{title} - {item}", async () => await test(item), ct));
-        }
-        else
-        {
-            foreach (var item in cases)
-            {
-                await It($"{title} - {item}", async () => await test(item), cancellationToken);
-            }
-        }
+        return _testRunner.RunEach(
+            title,
+            cases,
+            (item, ct) => test(item),
+            parallel,
+            cancellationToken);
     }
 
     /// <summary>
@@ -345,7 +278,7 @@ public static class Test
     {
         ArgumentException.ThrowIfNullOrEmpty(title);
         Initialize();
-        _testLogger.LogTestSkipped(title, reason);
+        _testRunner.Skip(title, reason);
     }
 
     /// <summary>
