@@ -5,8 +5,6 @@
 /// </summary>
 public class TestContext
 {
-    private readonly Dictionary<string, object> _sharedData = [];
-
     /// <summary>
     /// 現在実行中のテストスイート
     /// </summary>
@@ -42,36 +40,4 @@ public class TestContext
         this.Timeout = timeout;
         this.CancellationToken = cancellationToken;
     }
-
-    /// <summary>
-    /// テストコンテキストにデータを設定します。
-    /// </summary>
-    public void Set<T>(string key, T value)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(key);
-        _sharedData[key] = value ?? throw new ArgumentNullException(nameof(value));
-    }
-
-    /// <summary>
-    /// テストコンテキストからデータを取得します。
-    /// </summary>
-    public T? Get<T>(string key)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(key);
-        return _sharedData.TryGetValue(key, out var value) ? (T)value : default;
-    }
-
-    /// <summary>
-    /// 指定したキーのデータを削除します。
-    /// </summary>
-    public bool Remove(string key)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(key);
-        return _sharedData.Remove(key);
-    }
-
-    /// <summary>
-    /// すべてのデータをクリアします。
-    /// </summary>
-    public void Clear() => _sharedData.Clear();
 }
