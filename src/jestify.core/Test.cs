@@ -6,54 +6,99 @@ namespace jestify.core;
 
 public static class Test
 {
-    private static readonly AsyncLocal<ILogger> _logger = new();
-    private static readonly AsyncLocal<Func<Task>?> _setup = new();
-    private static readonly AsyncLocal<Func<Task>?> _teardown = new();
+    private static readonly TestLogger _testLogger;
+    private static readonly TestLifecycleManager _lifecycleManager;
+    private static int _defaultTimeout = 5000;
+    private static bool _isInitialized;
+
+    static Test()
+    {
+        _testLogger = new TestLogger();
+        _lifecycleManager = new TestLifecycleManager(_testLogger);
+    }
+
+    /// <summary>
+    /// テストフレームワークの設定を構成します。
+    /// </summary>
+    public static void Configure(Action<TestConfiguration> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var config = new TestConfiguration();
+        configure(config);
+
+        if (config.Logger != null)
+        {
+            _testLogger.SetLogger(config.Logger);
+        }
+        else if (config.LoggerConfiguration != null)
+        {
+            _testLogger.SetLogger(LoggerFactory.Create(config.LoggerConfiguration)
+                .CreateLogger(nameof(Test)));
+        }
+
+        _defaultTimeout = config.DefaultTimeout;
+        _isInitialized = true;
+    }
+
+    private static void Initialize()
+    {
+        if (!_isInitialized)
+        {
+            Configure(_ => { });
+        }
+    }
 
     /// <summary>
     /// ロガーを設定します。
     /// </summary>
-    public static void SetLogger(ILogger logger) => _logger.Value = logger;
+    public static void SetLogger(ILogger logger)
+    {
+        Initialize();
+        _testLogger.SetLogger(logger);
+    }
 
     /// <summary>
-    /// グローバルセットアップメソッド
+    /// デフォルトのタイムアウト時間を設定します。
     /// </summary>
-    public static void Setup(Func<Task> action) => _setup.Value = action;
-
-    /// <summary>
-    /// 同期セットアップメソッドのオーバーロード
-    /// </summary>
-    public static void Setup(Action action) => _setup.Value = () => Task.Run(action);
-
-    /// <summary>
-    /// グローバルティアダウンメソッド
-    /// </summary>
-    public static void Teardown(Func<Task> action) => _teardown.Value = action;
-
-    /// <summary>
-    /// 同期ティアダウンメソッドのオーバーロード
-    /// </summary>
-    public static void Teardown(Action action) => _teardown.Value = () => Task.Run(action);
+    public static void SetTimeout(int timeoutMs)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeoutMs, 0);
+        _defaultTimeout = timeoutMs;
+    }
 
     /// <summary>
     /// テストスイートを定義します。
     /// </summary>
     public static async Task Describe(string title, Func<Task> suite, CancellationToken cancellationToken = default)
     {
-        EnsureLogger();
-        _logger.Value!.LogInformation("[Describe] {Title}", title);
+        ArgumentException.ThrowIfNullOrEmpty(title);
+        ArgumentNullException.ThrowIfNull(suite);
+        Initialize();
+
+        _testLogger.LogSuiteStart(title);
+        var currentSuite = new TestSuite(title);
+        _lifecycleManager.PushSuite(currentSuite);
 
         try
         {
-            if (_setup.Value != null)
-                await _setup.Value().WaitAsync(cancellationToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(_defaultTimeout);
 
-            await suite().WaitAsync(cancellationToken);
+            await _lifecycleManager.ExecuteBeforeAllHooks(currentSuite, timeoutCts.Token);
+            await suite().WaitAsync(timeoutCts.Token);
         }
         finally
         {
-            if (_teardown.Value != null)
-                await _teardown.Value().WaitAsync(cancellationToken);
+            try
+            {
+                await _lifecycleManager.ExecuteAfterAllHooks(currentSuite, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _testLogger.LogHookError("AfterAll", currentSuite.Title, ex);
+            }
+            _lifecycleManager.PopSuite();
         }
     }
 
@@ -61,37 +106,57 @@ public static class Test
     /// 同期スイートのオーバーロード
     /// </summary>
     public static Task Describe(string title, Action suite, CancellationToken cancellationToken = default)
-        => Describe(title, () => Task.Run(suite), cancellationToken);
+    {
+        ArgumentNullException.ThrowIfNull(suite);
+        return Describe(title, () => { suite(); return Task.CompletedTask; }, cancellationToken);
+    }
 
     /// <summary>
     /// 非同期メソッドのテストを定義します。
     /// </summary>
     public static async Task It(string title, Func<Task> test, CancellationToken cancellationToken = default)
     {
-        EnsureLogger();
+        ArgumentException.ThrowIfNullOrEmpty(title);
+        ArgumentNullException.ThrowIfNull(test);
+        Initialize();
+
         var stopwatch = Stopwatch.StartNew();
 
         try
         {
-            await test().WaitAsync(cancellationToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(_defaultTimeout);
+
+            await _lifecycleManager.ExecuteBeforeEachHooks(timeoutCts.Token);
+
+            try
+            {
+                await test().WaitAsync(timeoutCts.Token);
+                stopwatch.Stop();
+                _testLogger.LogTestSuccess(title, stopwatch.ElapsedMilliseconds);
+            }
+            finally
+            {
+                await _lifecycleManager.ExecuteAfterEachHooks(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
             stopwatch.Stop();
-            _logger.Value!.LogInformation("✔ {Title} (Completed in {Elapsed} ms)",
-                title, stopwatch.ElapsedMilliseconds);
+            _testLogger.LogTestTimeout(title, _defaultTimeout);
+            throw new TestTimeoutException(title, TimeSpan.FromMilliseconds(_defaultTimeout));
         }
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
-            _logger.Value!.LogWarning("⚠ {Title} (Cancelled after {Elapsed} ms)",
-                title, stopwatch.ElapsedMilliseconds);
+            _testLogger.LogTestCancelled(title, stopwatch.ElapsedMilliseconds);
             throw;
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            var duration = TimeSpan.FromMilliseconds(stopwatch.ElapsedMilliseconds);
-            _logger.Value!.LogError(ex, "✘ {Title} (Failed after {Elapsed} ms)",
-                title, stopwatch.ElapsedMilliseconds);
-            throw new TestFailureException(title, duration, ex);
+            _testLogger.LogTestFailure(title, stopwatch.ElapsedMilliseconds, ex);
+            throw new TestFailureException(title, TimeSpan.FromMilliseconds(stopwatch.ElapsedMilliseconds), ex);
         }
     }
 
@@ -99,33 +164,9 @@ public static class Test
     /// 同期メソッドのテストを定義します。
     /// </summary>
     public static Task It(string title, Action test, CancellationToken cancellationToken = default)
-        => It(title, () => Task.Run(test), cancellationToken);
-
-    /// <summary>
-    /// 指定時間内に非同期処理が完了するかを確認します。
-    /// </summary>
-    public static async Task Timeout(string title, Func<Task> test, int timeoutMs)
     {
-        EnsureLogger();
-        using var cts = new CancellationTokenSource(timeoutMs);
-
-        try
-        {
-            await test().WaitAsync(cts.Token);
-            _logger.Value!.LogInformation("✔ {Title} (Completed within {Timeout} ms)",
-                title, timeoutMs);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.Value!.LogWarning("⚠ {Title} (Timed out after {Timeout} ms)",
-                title, timeoutMs);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.Value!.LogError(ex, "✘ {Title} (Error during timeout)", title);
-            throw;
-        }
+        ArgumentNullException.ThrowIfNull(test);
+        return It(title, () => { test(); return Task.CompletedTask; }, cancellationToken);
     }
 
     /// <summary>
@@ -135,19 +176,28 @@ public static class Test
         string title,
         IEnumerable<T> cases,
         Func<T, Task> test,
-        ParallelOptions? parallelOptions = null,
+        bool parallel = false,
         CancellationToken cancellationToken = default)
     {
-        EnsureLogger();
+        ArgumentException.ThrowIfNullOrEmpty(title);
+        ArgumentNullException.ThrowIfNull(cases);
+        ArgumentNullException.ThrowIfNull(test);
+        Initialize();
 
-        if (parallelOptions != null)
+        if (parallel)
         {
-            await Parallel.ForEachAsync(cases, parallelOptions, async (item, ct)
-                => await It($"{title} - {item}", async () => await test(item), ct));
+            var options = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Environment.ProcessorCount,
+                CancellationToken = cancellationToken
+            };
+
+            await Parallel.ForEachAsync(cases, options, async (item, ct) =>
+                await It($"{title} - {item}", async () => await test(item), ct));
         }
         else
         {
-            foreach (T? item in cases)
+            foreach (var item in cases)
             {
                 await It($"{title} - {item}", async () => await test(item), cancellationToken);
             }
@@ -161,27 +211,145 @@ public static class Test
         string title,
         IEnumerable<T> cases,
         Action<T> test,
-        ParallelOptions? parallelOptions = null,
+        bool parallel = false,
         CancellationToken cancellationToken = default)
-        => Each(title, cases, item => Task.Run(() => test(item)), parallelOptions, cancellationToken);
+    {
+        ArgumentNullException.ThrowIfNull(test);
+        return Each(title, cases, item => { test(item); return Task.CompletedTask; }, parallel, cancellationToken);
+    }
+
+    /// <summary>
+    /// スイート実行前に1回だけ実行するセットアップを定義します。
+    /// </summary>
+    public static void BeforeAll(Func<CancellationToken, Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddBeforeAllHook(action);
+    }
+
+    /// <summary>
+    /// スイート実行前に1回だけ実行する非同期セットアップのオーバーロード
+    /// </summary>
+    public static void BeforeAll(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddBeforeAllHook(ct => action());
+    }
+
+    /// <summary>
+    /// スイート実行前に1回だけ実行する同期セットアップのオーバーロード
+    /// </summary>
+    public static void BeforeAll(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddBeforeAllHook(ct => { action(); return Task.CompletedTask; });
+    }
+
+    /// <summary>
+    /// スイート実行後に1回だけ実行するティアダウンを定義します。
+    /// </summary>
+    public static void AfterAll(Func<CancellationToken, Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddAfterAllHook(action);
+    }
+
+    /// <summary>
+    /// スイート実行後に1回だけ実行する非同期ティアダウンのオーバーロード
+    /// </summary>
+    public static void AfterAll(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddAfterAllHook(ct => action());
+    }
+
+    /// <summary>
+    /// スイート実行後に1回だけ実行する同期ティアダウンのオーバーロード
+    /// </summary>
+    public static void AfterAll(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddAfterAllHook(ct => { action(); return Task.CompletedTask; });
+    }
+
+    /// <summary>
+    /// 各テスト実行前に実行するセットアップを定義します。
+    /// </summary>
+    public static void BeforeEach(Func<CancellationToken, Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddBeforeEachHook(action);
+    }
+
+    /// <summary>
+    /// 各テスト実行前に実行する非同期セットアップのオーバーロード
+    /// </summary>
+    public static void BeforeEach(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddBeforeEachHook(ct => action());
+    }
+
+    /// <summary>
+    /// 各テスト実行前に実行する同期セットアップのオーバーロード
+    /// </summary>
+    public static void BeforeEach(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddBeforeEachHook(ct => { action(); return Task.CompletedTask; });
+    }
+
+    /// <summary>
+    /// 各テスト実行後に実行するティアダウンを定義します。
+    /// </summary>
+    public static void AfterEach(Func<CancellationToken, Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddAfterEachHook(action);
+    }
+
+    /// <summary>
+    /// 各テスト実行後に実行する非同期ティアダウンのオーバーロード
+    /// </summary>
+    public static void AfterEach(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddAfterEachHook(ct => action());
+    }
+
+    /// <summary>
+    /// 各テスト実行後に実行する同期ティアダウンのオーバーロード
+    /// </summary>
+    public static void AfterEach(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        Initialize();
+        _lifecycleManager.AddAfterEachHook(ct => { action(); return Task.CompletedTask; });
+    }
 
     /// <summary>
     /// テストをスキップします。
     /// </summary>
-    public static void Skip(string title, string reason)
+    public static void Skip(string title, string? reason = null)
     {
-        EnsureLogger();
-        _logger.Value!.LogInformation("⏭ {Title} (Skipped: {Reason})", title, reason);
+        ArgumentException.ThrowIfNullOrEmpty(title);
+        Initialize();
+        _testLogger.LogTestSkipped(title, reason);
     }
 
     /// <summary>
     /// モックを作成します。
     /// </summary>
     public static Mock<T> Mock<T>() where T : class => new();
-
-    private static void EnsureLogger()
-    {
-        _logger.Value ??= LoggerFactory.Create(builder => builder.AddConsole())
-                .CreateLogger(nameof(Test));
-    }
 }
