@@ -5,8 +5,8 @@ namespace jestify;
 
 public static class Test
 {
-    private static readonly ITestLogger _testLogger;
-    private static readonly ITestLifecycleManager _lifecycleManager;
+    private static readonly TestLogger _testLogger;
+    private static readonly TestLifecycleManager _lifecycleManager;
     private static readonly TestRunner _testRunner;
     private static bool _isInitialized;
 

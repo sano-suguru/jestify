@@ -10,6 +10,7 @@ public class TestRunner
     private readonly ITestLogger _logger;
     private readonly ITestLifecycleManager _lifecycleManager;
     private readonly ParallelOptions _defaultParallelOptions;
+    private readonly AsyncLocal<TestContext?> _currentContext = new();
     private int _defaultTimeout;
 
     public TestRunner(
@@ -31,14 +32,16 @@ public class TestRunner
     }
 
     /// <summary>
+    /// 現在のテストコンテキストを取得します。
+    /// </summary>
+    public TestContext? CurrentContext => _currentContext.Value;
+
+    /// <summary>
     /// デフォルトのタイムアウト時間を設定します。
     /// </summary>
     public void SetTimeout(int timeoutMs)
     {
-        if (timeoutMs <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(timeoutMs), "Timeout must be greater than 0");
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeoutMs, 0);
         _defaultTimeout = timeoutMs;
     }
 
@@ -54,10 +57,17 @@ public class TestRunner
         var currentSuite = new TestSuite(title);
         _lifecycleManager.PushSuite(currentSuite);
 
+        var previousContext = _currentContext.Value;
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(_defaultTimeout);
+
+            _currentContext.Value = new TestContext(
+                currentSuite,
+                title,
+                _defaultTimeout,
+                timeoutCts.Token);
 
             await _lifecycleManager.ExecuteBeforeAllHooks(currentSuite, timeoutCts.Token);
             await suite(timeoutCts.Token);
@@ -73,6 +83,7 @@ public class TestRunner
                 _logger.LogHookError("AfterAll", title, ex);
             }
             _lifecycleManager.PopSuite();
+            _currentContext.Value = previousContext;
         }
     }
 
@@ -85,11 +96,19 @@ public class TestRunner
         ArgumentNullException.ThrowIfNull(test);
 
         var stopwatch = Stopwatch.StartNew();
+        var previousContext = _currentContext.Value;
 
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(_defaultTimeout);
+
+            var currentSuite = _lifecycleManager.GetCurrentSuite();
+            _currentContext.Value = new TestContext(
+                currentSuite,
+                title,
+                _defaultTimeout,
+                timeoutCts.Token);
 
             await _lifecycleManager.ExecuteBeforeEachHooks(timeoutCts.Token);
 
@@ -121,6 +140,10 @@ public class TestRunner
             stopwatch.Stop();
             _logger.LogTestFailure(title, stopwatch.ElapsedMilliseconds, ex);
             throw new TestFailureException(title, TimeSpan.FromMilliseconds(stopwatch.ElapsedMilliseconds), ex);
+        }
+        finally
+        {
+            _currentContext.Value = previousContext;
         }
     }
 
